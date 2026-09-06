@@ -885,7 +885,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   ctx.effect(() => {
-    logger.info('ready v0.4（磁盘反射弧：14 工具；安全重构：execute 强制拦截保护路径 + 语义裁决 fail-closed + trust 审计）')
+    logger.info('ready v0.4（磁盘反射弧：16 工具；安全重构：execute 强制拦截保护路径 + 语义裁决 fail-closed + trust 审计）')
     return () => { /* 清理 */ }
   })
 }
