@@ -33,14 +33,26 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   type CliResult, type DeepNode,
   cliError, collectItems, humanSize, summarizeScan, summarizeDeep,
   buildReclaimArgs, buildCleanArgs, filterSmartCandidates, smartClearPayload,
 } from './logic.js'
+import {
+  buildStamp, clyanTrace, clyanTracePath, composeBootEntry, composeCliEntry,
+  composeScanShapeEntry, instrumentTool, readPackageVersion, resolveHome,
+} from './trace.js'
 
 export const name = 'clyan'
 export const inject = ['tools'] as const
+
+/**
+ * 构建自报（Q1 的真源）：`<package.json version>@<lib/index.js mtime ms>`。
+ * 模块级常量——装载即定，进程内不复算（版本口径以 `package.json` 为准，见 docs/semantic.md §10 U4）。
+ */
+const OWN_FILE = fileURLToPath(import.meta.url)
+const BUILD = buildStamp(OWN_FILE, readPackageVersion(OWN_FILE))
 
 export interface Config {
   /** clyan 可执行文件（PATH 内命令名或绝对路径） */
@@ -56,8 +68,8 @@ export const Config = z.object({
   defaultPath: z.string().default('C:\\'),
 })
 
-/** 调用 clyan，返回解析后的 JSON（stdout 首 JSON 对象/数组） */
-function runCli(config: Config, args: string[], timeoutMs?: number): Promise<CliResult> {
+/** 调用 clyan 的**原实现**（body 一字未改；唯一的观测入口见下方 `runCli`） */
+function runCliRaw(config: Config, args: string[], timeoutMs?: number): Promise<CliResult> {
   return new Promise((resolve) => {
     const child = spawn(config.clyanBin, ['--json', ...args], {
       windowsHide: true,
@@ -91,6 +103,23 @@ function runCli(config: Config, args: string[], timeoutMs?: number): Promise<Cli
       clearTimeout(timer)
       resolve({ ok: false, data: null, raw: '', stderr: '无法启动 clyan：' + err.message })
     })
+  })
+}
+
+/**
+ * 调用 clyan（**唯一对外入口**）：包一层观测——无论成功/超时/无法启动，都落一行 `cli`
+ * （记上游**形状**：子命令 / argv 摘要 / stdout 字符数 / 解析形态 / 是否退化到正则兜底 / 耗时）。
+ *
+ * 零业务影响：只用 `.then(onFulfilled)`——不吞异常、不改返回值；落盘失败由 `clyanTrace` 内部吞掉，
+ * **返回值一律忽略**（观测绝不反噬清理动作）。
+ */
+function runCli(config: Config, args: string[], timeoutMs?: number): Promise<CliResult> {
+  const startedAtMs = Date.now()
+  return runCliRaw(config, args, timeoutMs).then((r) => {
+    clyanTrace(composeCliEntry({
+      now: startedAtMs, build: BUILD, argv: args, durationMs: Date.now() - startedAtMs, result: r,
+    }))
+    return r
   })
 }
 
@@ -140,10 +169,32 @@ async function scanDeepTree(
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('dsh-clyan')
 
+  // ══════════════ 自证轨迹（可维护性 S4 证据层 · 观测绝不反噬业务） ══════════════
+  // 单点收口①：`reg` 是 **16 个工具的唯一注册入口**（一个包装器覆盖整个工具面）——
+  // 不在 16 个 execute 里各改一遍（漏一处就是新的观测盲区）。轨迹答案的五问见 src/trace.ts 头注释。
+  const register = ctx.tools.register.bind(ctx.tools)
+  const toolNames: string[] = []
+  /** 轨迹落点（**单一真源**：`resolveHome()` 是唯一的 DSH_HOME 解析实现）。 */
+  const TRACE_PATH = clyanTracePath(resolveHome())
+  const reg = (tool: Parameters<typeof ctx.tools.register>[0]): (() => void) => {
+    toolNames.push(tool.name)
+    return register(instrumentTool(tool, { build: BUILD }))
+  }
+  // 单点收口②：摘要层唯一入口——`summarizeScan` 的两个调用点（clyan_scan / clyan_report）都走它，
+  // 保证「上游给了什么形状 → 丢了哪些条目 → 摘要产出多少」永远有一行账（summarizeScan 脏数据缺陷的可见面）。
+  const summarizeTraced = (raw: unknown, topN: number, op: string): any => {
+    const startedAtMs = Date.now()
+    const summary = summarizeScan(raw, topN)
+    clyanTrace(composeScanShapeEntry({
+      now: startedAtMs, build: BUILD, op, raw, summary, durationMs: Date.now() - startedAtMs,
+    }))
+    return summary
+  }
+
   // ══════════════ 感知层 ══════════════
 
   // ---------- clyan_pulse：磁盘健康检查 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_pulse',
     description: '磁盘健康检查（<1ms 反射，零扫描零 IO）：返回空闲空间。path 缺省用配置默认盘。',
     parameters: {
@@ -171,7 +222,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_scan：扫描（默认聚合摘要） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_scan',
     description: '扫描可清理项。默认返回聚合摘要（分类/安全分布/top 大项），detail=true 才返回全量 items——防撑爆上下文。',
     parameters: {
@@ -201,12 +252,12 @@ export function apply(ctx: Context, config: Config): void {
       const err = cliError(r)
       if (err !== null) return { ok: false, result: null, error: err }
       if (args.detail === true) return { ok: true, result: r.data }
-      return { ok: true, result: summarizeScan(r.data, args.topN ?? 10) }
+      return { ok: true, result: summarizeTraced(r.data, args.topN ?? 10, 'clyan_scan') }
     },
   }))
 
   // ---------- clyan_report：磁盘全景报告（合成） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_report',
     description: '磁盘全景报告：合成 pulse + 扫描聚合 + 历史近况 → 一次调用拿决策全貌（磁盘状态/可清理潜力/近期清理）。',
     parameters: {
@@ -234,7 +285,7 @@ export function apply(ctx: Context, config: Config): void {
       if (cliError(pulseR) !== null && cliError(scanR) !== null) {
         return { ok: false, result: null, error: 'pulse: ' + (cliError(pulseR) ?? 'ok') + ' / scan: ' + (cliError(scanR) ?? 'ok') }
       }
-      const summary = scanR.data ? summarizeScan(scanR.data, 10) : null
+      const summary = scanR.data ? summarizeTraced(scanR.data, 10, 'clyan_report') : null
       const history = histR.data?.operations ?? []
       const recent = history.slice(0, 5).map((o: any) => ({
         id: o.id,
@@ -256,7 +307,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_space：磁盘空间占用分析 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_space',
     description: '磁盘空间占用分析（已占用分布）：总/已用/空闲/使用率 + top 大目录逐层展开 + gap 分析（未扫到部分）。回答「磁盘被什么占满了」。',
     parameters: {
@@ -302,7 +353,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_space_deep：深度空间扫描（内建递归，补 clyan 只扫顶层的缺） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_space_deep',
     description: '深度空间扫描（内建递归）：一次 DFS 计算目录树真实大小，回答「磁盘被什么占满」的深层版——clyan scan disk 只统计顶层（如 Users 只报 13GB 实际 226GB），本工具递归摸清。返回分层大目录 + 大文件。全盘可能 2-3 分钟。',
     parameters: {
@@ -345,7 +396,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_app_cache：应用内部缓存扫描（通用 AppData 关键字） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_app_cache',
     description: '应用内部缓存扫描（通用）：遍历 AppData\\Local+Roaming+LocalLow 各应用目录，递归找 cache/tmp/temp/log/old/backup/update/download 类子目录（>minSizeMB）。返回可清清单（path/size/safety/confidence）+ 聚合统计。这是专业清理工具的重点扫描——应用缓存往往单项几百 MB 到几 GB。',
     parameters: {
@@ -407,7 +458,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_doctor：系统诊断 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_doctor',
     description: 'Clyan 系统诊断：模块可导入性/数据库/磁盘/56 providers/缓存一致性检查。',
     parameters: {},
@@ -433,7 +484,7 @@ export function apply(ctx: Context, config: Config): void {
   // ══════════════ 决策层 ══════════════
 
   // ---------- clyan_reclaim：完整回收计划（全量扫描+分阶段） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_reclaim',
     description: '完整回收计划（=全量扫描→去重→按 recovery_cost 分阶段 none/low/medium/high/unknown）。默认返回聚合摘要（各阶段统计+recommendation+top 项），detail=true 才全量。默认 dry-run 不删；执行需 dryRun=false + yes=true。',
     parameters: {
@@ -487,7 +538,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_clean：清理执行 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_clean',
     description: '清理执行。安全闸门（fail-closed）：受保护路径 + 非缓存语义路径会被强制拦截（blocked_items），不再仅警告。默认 dry-run 预览（不删）；实际删除需显式：autoSafe=true（仅 confidence>=0.9 且 safety=safe）或 deep=true+yes=true。items 可传 JSON 指定清理项。',
     parameters: {
@@ -522,7 +573,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_smart_clear：智能清理链（扫描→过滤→建议，执行需确认） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_smart_clear',
     description: '智能清理链：扫描 → 只挑 recovery_cost=none & safety=safe & confidence>=0.9 的安全项 → 返回建议集。执行仍默认预览，需 dryRun=false + yes=true 才删——删不删归爱丽丝判断。',
     parameters: {
@@ -578,7 +629,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_auto_clear：零决策自动清理 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_auto_clear',
     description: '零决策自动清理：只删 recovery_cost=none 项（Temp/npx/缩略图/WER 等）。使用缓存数据优先。实际执行会删文件——调用前确认。',
     parameters: {
@@ -610,7 +661,7 @@ export function apply(ctx: Context, config: Config): void {
   // ══════════════ 闭环层 ══════════════
 
   // ---------- clyan_history：清理历史 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_history',
     description: '查看清理历史：最近操作列表，或按 id 查看单次详情。',
     parameters: {
@@ -640,7 +691,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_undo：撤销清理 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_undo',
     description: '撤销一次清理操作（从回收站恢复）。需要操作 ID（来自 history）。',
     parameters: {
@@ -666,7 +717,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_verify：清理验证 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_verify',
     description: '清理验证：无 id 时对比当前磁盘状态（pulse）与最近清理历史；有 id 时返回单次操作详情（含 before/after free）。闭环确认清理效果。',
     parameters: {
@@ -724,7 +775,7 @@ export function apply(ctx: Context, config: Config): void {
   // ══════════════ 运维层 ══════════════
 
   // ---------- clyan_schedule：定时清理管理 ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_schedule',
     description: '定时清理任务管理：create=创建每周定时清理（path/time 可选），remove=移除，缺省=查看。注意：自主性铁律下爱丽丝不自动创建定时删除，此工具供主人安排时使用。',
     parameters: {
@@ -757,7 +808,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   // ---------- clyan_trust：可信路径管理（含审计） ----------
-  ctx.tools.register(defineTool({
+  reg(defineTool({
     name: 'clyan_trust',
     description: '可信路径管理：list=查看，add=添加（跳过保护警告），remove=移除，audit=查看 trust 放行审计日志。安全重构后：trust 放行会记录时间/来源/原因（可追溯）。',
     parameters: {
@@ -786,6 +837,19 @@ export function apply(ctx: Context, config: Config): void {
       const err = cliError(r)
       if (err !== null) return { ok: false, result: null, error: err }
       return { ok: true, result: r.data }
+    },
+  }))
+
+  // boot 行：进程级构建自报 + 生效配置 + 工具面（`tail` 首行即答「线上跑的是哪个构建 / 挂的是哪几个工具」）。
+  clyanTrace(composeBootEntry({
+    now: Date.now(),
+    build: BUILD,
+    path: TRACE_PATH,
+    cfg: {
+      clyanBin: config.clyanBin,
+      timeoutMs: config.timeoutMs,
+      defaultPath: config.defaultPath,
+      tools: toolNames,
     },
   }))
 
