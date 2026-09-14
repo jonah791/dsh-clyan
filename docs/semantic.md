@@ -2,13 +2,14 @@
 
 > 版本 v0.1 · 2026-09-14 · 作者：爱丽丝 · 状态：**draft**
 > 开发方式：语义文档优先（先写清「是什么/什么关系/怎么裁决」，再让实现逼近，最后用实践回修）
-> 实现落点：`self-plugins/dsh-clyan/src/index.ts`（唯一源文件，891 行 / 42,347 B；构建产物 `lib/index.js`）
+> 实现落点：`self-plugins/dsh-clyan/src/index.ts`（接线段：IO / 子进程 / 工具注册，16 工具）+ `src/logic.ts`（**纯逻辑层**，2026-09-14 补课从 `apply()` 闭包抽出）；构建产物 `lib/index.js` / `lib/logic.js`
 
 | 项 | 值 |
 |----|----|
 | 能力名 | dsh-clyan（插件内 `name = 'clyan'`） |
 | 主副本路径 | `self-plugins/dsh-clyan/docs/semantic.md` |
-| 实现落点 | `self-plugins/dsh-clyan/src/index.ts` |
+| 实现落点 | `self-plugins/dsh-clyan/src/index.ts`（接线/IO）+ `src/logic.ts`（纯逻辑：argv 构造 / 结果整形 / 容错，可离线单测） |
+| 测试 | `tests/logic.test.mjs`（31 例）+ `tests/cli-contract.test.mjs`（13 例）＝ 44 例；跑 **lib 产物**（与运行时同源）；命令 `npm test`（= `node --test "tests/*.test.mjs"`） |
 | 版本 | `package.json` = 0.1.0（源码 effect 日志自称 **v0.4**） |
 | 组合行 | `E:\alice\.dsh\profiles\web\cordis.patch.yml` 行 162–164，`id: agent-clyan`，**无 config**（`clyanBin='clyan'` 走 PATH、`defaultPath='C:\'`） |
 | 状态 | **draft**（实现已上线并挂载；本文为 2026-09-14 补课产物） |
@@ -74,6 +75,7 @@
 3. **I3 大输出默认降级**：`scan`/`reclaim`/`app_cache` 默认返回聚合摘要，全量 `items` 仅在 `detail:true` 时返回，避免撑爆上下文。
 4. **I4 失败闭合**：CLI 失败/超时/无法启动一律返回 `{ok:false, error}`，不返回半截数据当成功（唯一例外见 §5「聚合中的部分容忍」）。
 5. **I5 无落地副作用**：本插件不写任何缓存/状态/侧车文件（截图版对照：`dsh-agent-webops` 会落 PNG，本插件**零落盘**）。
+6. **I6 外部数据容错（2026-09-14 补课新增）**：**`clyan` 的 JSON 形状不由本插件保证**——遍历其输出前一律归一（`asArray`）或跳过脏条目；**退化数据 → 退化输出，绝不抛**（例：`details.<cat>=null` 不得让 `summarizeScan` 抛 TypeError）。合法输入路径与修正前逐字一致（见 §7 A11、§9）。
 
 ## 4 · 契约
 
@@ -116,7 +118,9 @@
 | 依赖服务 | `src/index.ts:inject = ['tools']` | cordis 激活门 |
 | 子进程 | `spawn(config.clyanBin, ['--json', …argv], { windowsHide:true, shell:false })`（`src/index.ts:57`） | 除 `clyan_space_deep` 外全部工具 |
 | 插件内递归 | `scanDeepTree()`（`src/index.ts:162`）+ `summarizeDeep()`（`:203`） | `clyan_space_deep` 专用（**不调 CLI**） |
-| 插件内过滤 | `collectItems()` + 三重条件 filter（`src/index.ts:645-647`） | `clyan_smart_clear` 的**插件侧安全裁决** |
+| 插件内过滤 | `filterSmartCandidates()` + `smartClearPayload()`（`src/logic.ts`；调用点 `src/index.ts` 的 `clyan_smart_clear.execute`） | `clyan_smart_clear` 的**插件侧安全裁决**（三重白名单 + 载荷只带 path/size） |
+| 纯逻辑层 | `humanSize` / `cliError` / `collectItems` / `summarizeScan` / `summarizeDeep` / `buildReclaimArgs` / `buildCleanArgs`（`src/logic.ts`） | 全部由 `src/index.ts` import 使用（**调用点单点**：`import { … } from './logic.js'`，行 34–38） |
+| 测试（唯一消费方） | `tests/logic.test.mjs` / `tests/cli-contract.test.mjs` → `import … from '../lib/logic.js'` | 跑 **lib 产物**（不跑 src）——与运行时同源；`npm test` |
 | 只读 fs | `fsp.readdir` / `fsp.stat`（`src/index.ts:173/189`） | 深扫时（**I2：读-only**） |
 | 铁律接线 | `clyan_schedule` 的 tool description：**「自主性铁律下爱丽丝不自动创建定时删除，此工具供主人安排时使用」**（`src/index.ts:824`） | 工具描述层对 `AGENTS.md §二·2.4`（禁止自动决策机制）的显式落实 |
 | 生态盘点 | `E:\alice\docs\semantics\coverage.md:33` 把 clyan 列为 **P3 待补文档**能力 | 本次补课即该条目的执行 |
@@ -158,14 +162,19 @@
 |---|-----------|------------------------------|------|
 | A1 | 工具面恰为 16 个（四层） | 会话工具列表 `clyan_` 前缀命中 16；源码 `ctx.tools.register` 计数 = 16 | 已实测（源码计数） |
 | A2 | **文件头注释的「14 个」是陈旧的** | `src/index.ts:7` 写「四层工具面（14 个）」，实际注册 16 个（含 `clyan_space`/`clyan_space_deep`） | 已实测（不一致，见 §8 缺口①） |
-| A3 | 删除类默认预览（I1） | `clyan_clean` 不传 `dryRun` → 实际 argv 含 `--dry-run`（CLI 回显/`history` 无新操作可证） | **待验收** |
+| A3 | 删除类默认预览（I1） | **`npm test` → `tests/cli-contract.test.mjs`**：`buildCleanArgs({})` 与 `buildReclaimArgs({})` 必含 `--dry-run`；`yes:true` 单独出现时仍保留 `--dry-run`；去掉 `--dry-run` 必须 `dryRun:false` **且** `yes:true`；含**尸体测试**证明检查器不空转 | **已验收（单测，2026-09-14）** |
 | A4 | 插件自身不删文件（I2） | 调用 `clyan_space_deep` 前后，目标盘文件数/mtime 不变 | **待验收** |
 | A5 | 大输出默认降级（I3） | `clyan_scan`（不带 detail）返回体含 `categories`/`safety_distribution`/`top_items`，**不含** `details.<cat>.items` | **待验收** |
-| A6 | `smart_clear` 三重过滤 | 构造 confidence<0.9 的项 → 不出现在 `top_candidates`；`executed:null` 且 note 提示需 `dryRun=false + yes=true` | **待验收** |
+| A6 | `smart_clear` 三重过滤 | **插件侧过滤**已离线验收（见 A12）；端到端（`executed:null` + note 提示需 `dryRun=false + yes=true`）**待线上验收** | 部分验收（离线部分已完成 2026-09-14） |
 | A7 | 无 CLI 即失败 | 临时把 `clyanBin` 指向不存在路径 → `'无法启动 clyan：…'`（非空成功） | **待验收** |
 | A8 | 当前进程加载最新构建 | lib mtime `2026-09-06 17:38:04` < web PID 7080 启动 `2026-09-14 10:05:47` | 已实测（2026-09-14 读数） |
 | A9 | 挂载行唯一且无 config | `grep -n "dsh-clyan" cordis.patch.yml` → 1 命中（行 164），相邻无 `config:` 块 | 已实测 |
 | A10 | 无技能接线 | `rg "clyan" alice-self-assets/skills/` → 0 命中 | 已实测（2026-09-14） |
+| A11 | **容错（I6）：损坏的 CLI 数据不得让摘要抛异常** | `npm test` → `summarizeScan: 脏数据（损坏的 details 条目）不再抛 TypeError` + `summarizeDeep: 退化输入…不抛` + `collectItems: 脏数据容错…不整体崩`。**修前证伪**：`node -e "Object.values({junk:null}).reduce((s,d)=>s+d.scan_time_ms,0)"` → `TypeError: Cannot read properties of null (reading 'scan_time_ms')`；`categories:5` → `5.map is not a function` | **已验收（单测 + 修前证伪，2026-09-14）** |
+| A12 | `smart_clear` 三重白名单可离线复现（插件唯一实质安全裁决） | `tests/logic.test.mjs` → `filterSmartCandidates:*` 5 例：命中 / 单条件失败即拒 / 阈值边界（恰 0.9 入选、0.9000001 拒绝）/ 脏数据全拒 / 幂等；`smartClearPayload` 不泄漏 confidence·safety | **已验收（单测，2026-09-14）** |
+| A13 | 失败面文案：`cliError` = `stderr > raw > 兜底`，截断 500，`ok:true` 恒 `null` | `tests/logic.test.mjs` → `cliError:*` 5 例（含纯空白 stderr、缺字段损坏对象） | **已验收（单测，2026-09-14）** |
+| A14 | 摘要不含全量 `items`（I3） | `tests/logic.test.mjs` → `summarizeScan: 摘要字段不含全量 items`（断言返回体无 `details`/`items` 键） | **已验收（单测，2026-09-14）** |
+| A15 | 测试**完全离线**（不对真实磁盘跑扫描/删除） | `tests/*.test.mjs` 只 import `../lib/logic.js` 纯函数；无 `child_process`/`node:fs` 调用、假数据全为构造对象；44 例耗时 <150ms | **已验收（代码审查 + 全绿，2026-09-14）** |
 
 ## 8 · 与实现的关系
 
@@ -174,7 +183,7 @@
   - **缺口① 头注释陈旧（已实测）**：`src/index.ts:7` 写「四层工具面（14 个）」，而实际注册 **16** 个（`clyan_space`、`clyan_space_deep` 未计入）。effect 日志（`:888`）写的是 16，二者自相矛盾。**以代码注册数为准（16）**。
   - **缺口② `clyanBin` 未在组合中钉住**：与 `dsh-anima-tags`（`tagsBin` 已钉绝对路径）形成反差；`clyan` 一旦离开 PATH，**16 个工具全部失效**（报错明确，但属可预防的环境耦合）。
   - **缺口③ 安全声明的归属未在代码中标注**：§5 那条「拦截在 CLI 内」的事实只能从 effect 日志文案推断，源码无注释说明 → 下一个读者极易误以为插件自带闸门。
-  - **缺口④ 无单测**：仓库内无 `tests/`；`scanDeepTree`（递归 + 阈值 + 深度门）与 `smart_clear` 三重过滤是**纯逻辑可测面**，却零测试（A5/A6 无自动化证据）。
+  - **缺口④ 无单测 → 已闭环（2026-09-14 补课）**：新增 `tests/logic.test.mjs`（31 例）+ `tests/cli-contract.test.mjs`（13 例），`package.json` 暴露 `npm test`；纯逻辑同时从 `apply()` 闭包搬进 `src/logic.ts`（**行为不变，只有一处刻意的容错修正**，见 §9 与 A11）。仍未覆盖：`scanDeepTree`（真扫磁盘的 IO 递归）与 16 个 `execute` 的接线层——测试纪律要求**离线且不碰真实磁盘**，这两处只能靠线上验收（A4/A5/A7）。
   - **缺口⑤ 无侧车轨迹**：零落盘 → 「实际 argv / 耗时 / 断在哪一段」事后全不可查（§5.22 五问中的三问）；且**删除类操作的 argv 不留痕**，事后只能靠 CLI 自己的 `history` 反查。
   - `package.json` 版本 `0.1.0` 与源码自称 `v0.4` 不一致（版本口径待归口）。
 
@@ -186,6 +195,14 @@
   - 语义**被修正**：头注释「14 个工具」→ 实测 **16 个**；version `0.1.0` vs effect 日志 `v0.4`（登记不一致，未裁决）。
   - 教训（同时回写技能 `semantic-doc-first`）：**透传型插件的「安全」必须写明出处**——文档若只抄工具描述里的「fail-closed/强制拦截」，读者会以为防护在本插件内；真实防护在被封装的二进制里，二者降级不会同步。
 
+- **2026-09-14 补课（第二轮）：补测试 + 覆盖失败路径（可维护性体检 S3/S6）**
+  - **做了什么（移动为主，改动最小化）**：把 `humanSize` / `cliError` / `collectItems` / `summarizeScan` / `summarizeDeep` 从 `src/index.ts` 的顶层搬进新模块 `src/logic.ts`（纯函数：无 IO、无 ctx、无时钟），并把两个删除类工具的 **argv 构造**（`buildReclaimArgs` / `buildCleanArgs`）与 **smart_clear 三重过滤**（`filterSmartCandidates` / `smartClearPayload`）也从 `execute` 闭包里抽出来——它们此前**完全不可测**，正是 I1 与「插件唯一实质安全裁决」的落点。接线层（`runCli` / `scanDeepTree` / 16 个 `execute`）留在 `index.ts`，一行未改。
+  - **新增测试**：`tests/logic.test.mjs`（31 例：单位换算与 NaN/负数/Infinity、错误文案优先级与截断、items 汇总容错、摘要排序/topN/分布、深树摘要 basename 与边界、白名单阈值与脏数据、幂等/不改写输入）+ `tests/cli-contract.test.mjs`（13 例：I1 默认预览、`--yes` 门控、argv 顺序锁定、空白/越界参数、**尸体测试**——用已知坏 argv 证明检查器真的会拦）。合计 **44/44 全绿**（`npm test`，<150ms）。
+  - **修前证伪的真缺陷（唯一行为改动，已显式声明）**：`summarizeScan` 的 `Object.values(scan.details).reduce((s,d) => s + (d.scan_time_ms ?? 0))` 在 `details.<cat>` 为 `null` 时抛 `TypeError: Cannot read properties of null`；`(scan.categories ?? []).map` 在 `categories` 非数组时抛 `x.map is not a function`——即 **CLI 输出一旦退化成脏数据，`clyan_scan`/`clyan_report` 的摘要层整体崩**，而这恰是本插件「防撑爆上下文」的关键路径。修法：引入 `asArray()` 归一 + 跳过 null 条目（**退化数据 → 退化输出，绝不抛**，见 I6）。**合法输入下的输出与修正前逐字一致**（搬家版对同一 `SCAN_SAMPLE` 的摘要断言即锁）。
+  - 语义**被补充**：I6（外部数据容错）；`tests/*.test.mjs` 与 `lib/logic.js` 的消费关系进入 §4.3 调用点清单。
+  - 语义**被修正**：本文原写「唯一源文件 891 行」→ 现为 `index.ts`（接线）+ `logic.ts`（纯逻辑）双文件；A3 由**待验收**转**已验收（单测）**，A6 转「部分验收（离线部分已验收）」。
+  - 教训：**「不可测」往往不是逻辑复杂，而是位置错了**——I1 安全默认曾藏在 `execute` 里，只能靠「跑一次真 CLI 看有没有删东西」验证（危险且昂贵）；搬到纯函数后，**危险语义变成了 12 行断言**。
+
 ## 10 · 未决问题
 
 - **U1 `clyanBin` 是否该在组合中钉绝对路径**：与 anima-tags 对齐（钉住）能消除 PATH 依赖，但会让「clyan 升级换目录」变成配置改动。倾向**钉住**（显式 > 隐式，AGENTS.md 包边界纪律）。需主人裁决。
@@ -193,3 +210,5 @@
 - **U3 `clyan_report` 部分失败的可判读性**：`ok:true` 但 `disk`/`cleanable` 可能为 `null`，调用方不细看会误读。倾向：增加 `partial: true` + `failed_parts: [...]` 字段（§5.22「断在哪一段」）。
 - **U4 版本口径**：`package.json 0.1.0` / 源码注释 `v0.2`（文件头）/ effect 日志 `v0.4`——三处不一致。倾向：以 `package.json` 为唯一真源，头注释与日志改为注入版本常量。需实现者裁决。
 - **U5 `clyan_space_deep` 与 CLI 的能力重叠**：CLI 已有 `scan disk`，插件又自建 DFS（因 CLI 只统计顶层）。长期看是「插件补 CLI 的缺」还是「该推 CLI 修」？倾向：先在 CLI 侧修，插件递归降级为可选——否则同一语义两份实现会漂移（I1 单一真源）。需裁决。
+
+**本轮（2026-09-14 补课：补测试 + 失败路径）闭环情况**：U1–U5 **均未被本次工作回答**（组合配置 / 留痕面 / 报告可判读性 / 版本口径 / 能力重叠——与「补测试」无因果关系，**不做形式闭环**）。本轮闭环的是 §8 的 **缺口④ 无单测**（→ 已闭环，见 §9）。U2（删除类留痕）在本轮取证中**证据增强**：argv 现在可离线单测，但**线上实际 argv 仍零留痕**——U2 优先级因此上调（它拦住的正是「测试绿了、线上跑的却是哪条 argv 仍不可查」）。

@@ -33,6 +33,11 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
+import {
+  type CliResult, type DeepNode,
+  cliError, collectItems, humanSize, summarizeScan, summarizeDeep,
+  buildReclaimArgs, buildCleanArgs, filterSmartCandidates, smartClearPayload,
+} from './logic.js'
 
 export const name = 'clyan'
 export const inject = ['tools'] as const
@@ -52,7 +57,7 @@ export const Config = z.object({
 })
 
 /** 调用 clyan，返回解析后的 JSON（stdout 首 JSON 对象/数组） */
-function runCli(config: Config, args: string[], timeoutMs?: number): Promise<{ ok: boolean; data: any; raw: string; stderr: string }> {
+function runCli(config: Config, args: string[], timeoutMs?: number): Promise<CliResult> {
   return new Promise((resolve) => {
     const child = spawn(config.clyanBin, ['--json', ...args], {
       windowsHide: true,
@@ -89,76 +94,9 @@ function runCli(config: Config, args: string[], timeoutMs?: number): Promise<{ o
   })
 }
 
-/** 从 CLI 结果构建统一错误信息 */
-function cliError(r: { ok: boolean; data: any; raw: string; stderr: string }): string | null {
-  if (r.ok) return null
-  return (r.stderr || r.raw || 'clyan 执行失败').slice(0, 500)
-}
-
-/** 收集 scan 结果里的全部 items（details.<cat>.items） */
-function collectItems(scan: any): any[] {
-  const items: any[] = []
-  const details = scan?.details ?? {}
-  for (const [cat, det] of Object.entries<any>(details)) {
-    if (det && Array.isArray(det.items)) {
-      for (const it of det.items) items.push({ ...it, _category: cat })
-    }
-  }
-  return items
-}
-
-/** 人类可读大小 */
-function humanSize(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let i = 0
-  let v = bytes
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
-  return v.toFixed(1) + ' ' + units[i]
-}
-
-/** 扫描结果 → 聚合摘要（决策信号，不撑爆上下文） */
-function summarizeScan(scan: any, topN: number): any {
-  const items = collectItems(scan)
-  const categories = (scan?.categories ?? []).map((c: any) => ({
-    category: c.category,
-    total_size_human: c.total_size_human ?? humanSize(c.total_size ?? 0),
-    item_count: c.item_count ?? 0,
-  }))
-  const bySafety: Record<string, any[]> = {}
-  for (const it of items) {
-    const s = it.safety ?? 'unknown'
-    ;(bySafety[s] ??= []).push(it)
-  }
-  const safety_distribution = Object.fromEntries(
-    Object.entries(bySafety).map(([k, v]) => [k, {
-      count: v.length,
-      size_human: humanSize(v.reduce((s, it) => s + (it.size ?? 0), 0)),
-    }]),
-  )
-  const top = [...items]
-    .sort((a, b) => (b.size ?? 0) - (a.size ?? 0))
-    .slice(0, topN)
-    .map((it) => ({
-      path: it.path,
-      size_human: it.size_human ?? humanSize(it.size ?? 0),
-      safety: it.safety,
-      confidence: it.confidence,
-      recovery_cost: it.recovery_cost,
-      reason: it.reason ? String(it.reason).slice(0, 80) : '',
-    }))
-  return {
-    grand_total_human: scan?.grand_total_human ?? humanSize(scan?.grand_total ?? 0),
-    categories,
-    safety_distribution,
-    top_items: top,
-    total_items: items.length,
-    scan_time_ms: Object.values<any>(scan?.details ?? {}).reduce((s, d) => s + (d.scan_time_ms ?? 0), 0),
-  }
-}
+// cliError / collectItems / humanSize / summarizeScan / summarizeDeep 已搬至 src/logic.ts（纯逻辑可测化）
 
 /** 深度空间扫描：一次 DFS 计算所有目录大小（每文件只访问一次），收集大目录+大文件 */
-interface DeepNode { path: string; size: number; depth: number; children: DeepNode[] }
 async function scanDeepTree(
   path: string,
   maxDepth: number,
@@ -197,24 +135,6 @@ async function scanDeepTree(
     acc.dirs.push({ path, size: total, depth, children: children.slice(0, 10) })
   }
   return total
-}
-
-/** 深度扫描结果 → 分层地图（防撑爆上下文） */
-function summarizeDeep(acc: { dirs: DeepNode[]; files: { path: string; size: number }[] }, rootTotal: number, topN: number): any {
-  const dirs = [...acc.dirs]
-    .sort((a, b) => b.size - a.size)
-    .slice(0, topN)
-    .map((d) => ({
-      path: d.path,
-      size_human: humanSize(d.size),
-      depth: d.depth,
-      top_children: d.children.map((c) => ({ name: c.path.split(/[\\/]/).pop(), size_human: humanSize(c.size) })),
-    }))
-  const files = [...acc.files]
-    .sort((a, b) => b.size - a.size)
-    .slice(0, 10)
-    .map((f) => ({ path: f.path, size_human: humanSize(f.size) }))
-  return { root_total_human: humanSize(rootTotal), big_dirs: dirs, big_files: files }
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -535,11 +455,7 @@ export function apply(ctx: Context, config: Config): void {
       render: (_a: unknown, v: any) => [{ type: 'text', text: v.ok ? '回收：' + JSON.stringify(v.result).slice(0, 400) : '失败：' + String(v.error ?? '').slice(0, 100) }],
     },
     async execute(args: { path?: string; phase?: string; dryRun?: boolean; yes?: boolean; detail?: boolean }) {
-      const cliArgs = ['reclaim']
-      if (args.phase !== undefined && args.phase.trim() !== '') cliArgs.push('--phase', args.phase.trim())
-      if (args.dryRun !== false) cliArgs.push('--dry-run')
-      if (args.yes === true) cliArgs.push('--yes')
-      if (args.path !== undefined && args.path.trim() !== '') cliArgs.push(args.path.trim())
+      const cliArgs = buildReclaimArgs(args)
       const r = await runCli(config, cliArgs)
       const err = cliError(r)
       if (err !== null) return { ok: false, result: null, error: err }
@@ -597,16 +513,7 @@ export function apply(ctx: Context, config: Config): void {
       render: (_a: unknown, v: any) => [{ type: 'text', text: v.ok ? '清理：' + JSON.stringify(v.result).slice(0, 300) : '失败：' + String(v.error ?? '').slice(0, 100) }],
     },
     async execute(args: { items?: string; dryRun?: boolean; autoSafe?: boolean; deep?: boolean; strategy?: string; minConfidence?: number; path?: string; yes?: boolean; safety?: string }) {
-      const cliArgs = ['clean']
-      if (args.items !== undefined && args.items.trim() !== '') cliArgs.push('--items', args.items.trim())
-      if (args.dryRun !== false) cliArgs.push('--dry-run')
-      if (args.autoSafe === true) cliArgs.push('--auto-safe')
-      if (args.deep === true) cliArgs.push('--deep')
-      if (args.strategy !== undefined && args.strategy.trim() !== '') cliArgs.push('--strategy', args.strategy.trim())
-      if (args.minConfidence !== undefined) cliArgs.push('--min-confidence', String(args.minConfidence))
-      if (args.path !== undefined && args.path.trim() !== '') cliArgs.push('--path', args.path.trim())
-      if (args.yes === true) cliArgs.push('--yes')
-      if (args.safety !== undefined && args.safety.trim() !== '') cliArgs.push('--safety', args.safety.trim())
+      const cliArgs = buildCleanArgs(args)
       const r = await runCli(config, cliArgs)
       const err = cliError(r)
       if (err !== null) return { ok: false, result: null, error: err }
@@ -642,14 +549,12 @@ export function apply(ctx: Context, config: Config): void {
       const scanR = await runCli(config, ['scan', 'quick', '--phase', String(args.phase ?? 2), '--path', p], config.timeoutMs)
       const scanErr = cliError(scanR)
       if (scanErr !== null) return { ok: false, result: null, error: 'scan: ' + scanErr }
-      const candidates = collectItems(scanR.data).filter((it) =>
-        it.recovery_cost === 'none' && it.safety === 'safe' && (it.confidence ?? 0) >= conf,
-      )
+      const candidates = filterSmartCandidates(collectItems(scanR.data), conf)
       const total = candidates.reduce((s, it) => s + (it.size ?? 0), 0)
       const willExecute = args.dryRun === false && args.yes === true
       let executed: any = null
       if (willExecute && candidates.length > 0) {
-        const payload = candidates.map((it) => ({ path: it.path, size: it.size ?? 0 }))
+        const payload = smartClearPayload(candidates)
         const cleanR = await runCli(config, ['clean', '--items', JSON.stringify(payload), '--yes'], config.timeoutMs)
         executed = cleanR.data ?? { error: cleanR.stderr.slice(0, 200) }
       }
