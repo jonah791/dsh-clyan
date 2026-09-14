@@ -100,7 +100,10 @@ test('argDigest: 黑名单键名整键丢弃（连长度都不记）；白名单
 })
 
 test('argDigest/argsDigest: 白名单外的键一律不记；键序稳定；折叠主目录', () => {
-  const digest = argsDigest({ path: 'C:\\Users\\tr\\Temp', mode: 'quick', 秘: 'x', extra: 'y' })
+  // 主目录**显式注入**：缺省值是 os.homedir()，跨平台（Windows / WSL）会变——
+  // 断言夹具不得依赖「运行平台的家目录恰好是 C:\Users\tr」
+  const home = 'C:\\Users\\tr'
+  const digest = argsDigest({ path: `${home}\\Temp`, mode: 'quick', 秘: 'x', extra: 'y' }, home)
   assert.equal(digest, 'path=<home>\\Temp; mode=quick')
   assert.equal(argsDigest(null), '')
   assert.equal(argsDigest('str'), '')
@@ -120,11 +123,12 @@ test('payloadFold: items 载荷只记形状与条数，不记内容', () => {
 })
 
 test('argvDigest: --items 的值折叠；其余元素脱敏 + 折叠主目录', () => {
+  const home = 'C:\\Users\\tr'   // 同上传入：不得依赖运行平台的家目录
   assert.equal(
-    argvDigest(['clean', '--items', '[{"path":"a"},{"path":"b"},{"path":"c"}]', '--dry-run']),
+    argvDigest(['clean', '--items', '[{"path":"a"},{"path":"b"},{"path":"c"}]', '--dry-run'], home),
     'clean --items <payload: json[3]> --dry-run',
   )
-  assert.equal(argvDigest(['scan', 'quick', '--path', 'C:\\Users\\tr']), 'scan quick --path <home>')
+  assert.equal(argvDigest(['scan', 'quick', '--path', home], home), 'scan quick --path <home>')
   // --items 在末尾（无值）不得吞掉后续/越界
   assert.equal(argvDigest(['clean', '--items']), 'clean --items')
   assert.equal(argvDigest([]), '')
