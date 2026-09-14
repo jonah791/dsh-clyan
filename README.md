@@ -14,7 +14,7 @@
   <a href="https://github.com/jonah791/dsh-clyan"><img src="https://img.shields.io/badge/version-0.1.0-blue" alt="version"></a>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
-  <img src="https://img.shields.io/badge/tests-96%20(total%2C%2094%20pass%20on%20WSL)-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-96%20passed-brightgreen" alt="tests">
 </p>
 
 **一句话**：把 `clyan` 磁盘清理 CLI 包成 **16 个工具**——从「<1ms 的空闲空间反射」到「全盘递归查真凶」，再到「分阶段回收计划 + 带 fail-closed 闸门的清理执行」。
@@ -124,7 +124,7 @@ npm test        # = node --test "tests/*.test.mjs"
 
 **96 例**（`tests/cli-contract.test.mjs` / `logic.test.mjs` / `trace.test.mjs` / `trace-wiring.test.mjs`），覆盖：CLI 契约（参数拼装与 JSON 解析）、聚合摘要与 `scan-shape` 形状计算、脱敏（白名单外的键一律不记、键序稳定）、轨迹容错与尸体测试、工具注册接线。
 
-**本机实测（WSL 侧）**：`# pass 94 / # fail 2` —— 失败的两例是 `argDigest`/`argvDigest` 的**主目录折叠**断言（期望把 `C:\Users\<你>` 折叠为 `<home>`；在 Linux 主目录下不成立，故断言不过）。这是**测试的环境依赖**，不是运行期缺陷；未在 Windows 侧复跑，故不下「Windows 侧全绿」的结论。
+**双平台实测（2026-09-14）**：Windows `ℹ pass 96 / fail 0`、WSL `# pass 96 / fail 0`。（修复记录：两例 `argDigest`/`argvDigest` 的**主目录折叠**断言原先用硬编码 `C:\Users\tr` 当夹具却依赖 `os.homedir()`，在 WSL 下家目录是 `/root` 故不折叠 → 断言不过。**根因是测试的环境依赖**，不是运行期缺陷；现改为把 `home` 显式注入被测函数——夹具不再依赖「运行平台的家目录恰好是 C:\Users\tr」。）
 
 **真实外部依赖**：跑通业务需要 `clyan` CLI（Python 包）与 Windows 文件系统语义（AppData/回收站）；测试不需要（子进程以桩替代）。
 
