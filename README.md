@@ -124,7 +124,7 @@ npm test        # = node --test "tests/*.test.mjs"
 
 **96 例**（`tests/cli-contract.test.mjs` / `logic.test.mjs` / `trace.test.mjs` / `trace-wiring.test.mjs`），覆盖：CLI 契约（参数拼装与 JSON 解析）、聚合摘要与 `scan-shape` 形状计算、脱敏（白名单外的键一律不记、键序稳定）、轨迹容错与尸体测试、工具注册接线。
 
-**双平台实测（2026-09-14）**：Windows `ℹ pass 96 / fail 0`、WSL `# pass 96 / fail 0`。（修复记录：两例 `argDigest`/`argvDigest` 的**主目录折叠**断言原先用硬编码 `C:\Users\tr` 当夹具却依赖 `os.homedir()`，在 WSL 下家目录是 `/root` 故不折叠 → 断言不过。**根因是测试的环境依赖**，不是运行期缺陷；现改为把 `home` 显式注入被测函数——夹具不再依赖「运行平台的家目录恰好是 C:\Users\tr」。）
+**双平台实测（2026-09-14）**：Windows `ℹ pass 96 / fail 0`、WSL `# pass 96 / fail 0`。（修复记录：两例 `argDigest`/`argvDigest` 的**主目录折叠**断言原先用硬编码 `<home>` 当夹具却依赖 `os.homedir()`，在 WSL 下家目录是 `/root` 故不折叠 → 断言不过。**根因是测试的环境依赖**，不是运行期缺陷；现改为把 `home` 显式注入被测函数——夹具不再依赖「运行平台的家目录恰好是 <home>」。）
 
 **真实外部依赖**：跑通业务需要 `clyan` CLI（Python 包）与 Windows 文件系统语义（AppData/回收站）；测试不需要（子进程以桩替代）。
 

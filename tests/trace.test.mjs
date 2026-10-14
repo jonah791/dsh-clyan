@@ -76,14 +76,14 @@ test('redactText: 键值对/Bearer/厂商前缀/高熵串一律擦除，业务�
 })
 
 test('redactHome: Windows/POSIX/WSL 三形态折叠为 <home>（用户名不落盘）', () => {
-  assert.equal(redactHome('C:\\Users\\tr\\AppData', 'C:\\Users\\tr'), '<home>\\AppData')
-  assert.equal(redactHome('C:/Users/tr/AppData', 'C:\\Users\\tr'), '<home>/AppData')
-  assert.equal(redactHome('/mnt/c/Users/tr/AppData', 'C:\\Users\\tr'), '<home>/AppData')
+  assert.equal(redactHome('C:\\Users\\demo\\AppData', 'C:\\Users\\demo'), '<home>\\AppData')
+  assert.equal(redactHome('C:/Users/demo/AppData', 'C:\\Users\\demo'), '<home>/AppData')
+  assert.equal(redactHome('/mnt/c/Users/demo/AppData', 'C:\\Users\\demo'), '<home>/AppData')
   assert.equal(redactHome('/home/alice/x', '/home/alice'), '<home>/x')
   // 空 home 不做任何替换（不制造假证据）
   assert.equal(redactHome('C:\\x', ''), 'C:\\x')
   assert.deepEqual(homePathVariants(''), [])
-  assert.equal(homePathVariants('C:\\Users\\tr').length, 3)
+  assert.equal(homePathVariants('C:\\Users\\demo').length, 3)
 })
 
 // ══════════════ 参数摘要（白名单 + 黑名单双闸） ══════════════
@@ -101,8 +101,8 @@ test('argDigest: 黑名单键名整键丢弃（连长度都不记）；白名单
 
 test('argDigest/argsDigest: 白名单外的键一律不记；键序稳定；折叠主目录', () => {
   // 主目录**显式注入**：缺省值是 os.homedir()，跨平台（Windows / WSL）会变——
-  // 断言夹具不得依赖「运行平台的家目录恰好是 C:\Users\tr」
-  const home = 'C:\\Users\\tr'
+  // 断言夹具不得依赖「运行平台的家目录恰好是 C:\Users\demo」
+  const home = 'C:\\Users\\demo'
   const digest = argsDigest({ path: `${home}\\Temp`, mode: 'quick', 秘: 'x', extra: 'y' }, home)
   assert.equal(digest, 'path=<home>\\Temp; mode=quick')
   assert.equal(argsDigest(null), '')
@@ -123,7 +123,7 @@ test('payloadFold: items 载荷只记形状与条数，不记内容', () => {
 })
 
 test('argvDigest: --items 的值折叠；其余元素脱敏 + 折叠主目录', () => {
-  const home = 'C:\\Users\\tr'   // 同上传入：不得依赖运行平台的家目录
+  const home = 'C:\\Users\\demo'   // 同上传入：不得依赖运行平台的家目录
   assert.equal(
     argvDigest(['clean', '--items', '[{"path":"a"},{"path":"b"},{"path":"c"}]', '--dry-run'], home),
     'clean --items <payload: json[3]> --dry-run',
@@ -345,9 +345,9 @@ test('composeCliEntry: 记上游形状（verb/argv/字符数/解析形态/退化
 
 test('composeBootEntry: 版本构建自报 + 配置 + 工具面（主目录折叠）', () => {
   const entry = composeBootEntry({
-    now: 1, ...BASE, path: 'C:\\Users\\tr\\.dsh\\clyan-trace.jsonl',
-    cfg: { clyanBin: 'C:\\Users\\tr\\bin\\clyan.exe', timeoutMs: 180000, defaultPath: 'C:\\', tools: ['a', 'b'] },
-    home: 'C:\\Users\\tr',
+    now: 1, ...BASE, path: 'C:\\Users\\demo\\.dsh\\clyan-trace.jsonl',
+    cfg: { clyanBin: 'C:\\Users\\demo\\bin\\clyan.exe', timeoutMs: 180000, defaultPath: 'C:\\', tools: ['a', 'b'] },
+    home: 'C:\\Users\\demo',
   })
   assert.equal(entry.phase, 'boot')
   assert.equal(entry.tools.length, 2)

@@ -200,8 +200,8 @@ test('summarizeScan: 幂等——同一输入重复调用结果恒等且不改�
 
 const DEEP_ACC = {
   dirs: [
-    { path: 'C:\\Users\\tr\\AppData\\Local', size: 226 * 1024 ** 3, depth: 3, children: [
-      { path: 'C:\\Users\\tr\\AppData\\Local\\PackageCache', size: 80 * 1024 ** 3, depth: 4, children: [] },
+    { path: 'C:\\Users\\demo\\AppData\\Local', size: 226 * 1024 ** 3, depth: 3, children: [
+      { path: 'C:\\Users\\demo\\AppData\\Local\\PackageCache', size: 80 * 1024 ** 3, depth: 4, children: [] },
     ] },
     { path: 'C:\\Windows', size: 40 * 1024 ** 3, depth: 1, children: [] },
     { path: 'C:\\Temp', size: 1024, depth: 1, children: [] },
@@ -216,7 +216,7 @@ test('summarizeDeep: 正常路径——大目录降序 + topN 截断 + 子目录
   const s = summarizeDeep(DEEP_ACC, 300 * 1024 ** 3, 2)
   assert.equal(s.root_total_human, '300.0 GB')
   assert.equal(s.big_dirs.length, 2)
-  assert.equal(s.big_dirs[0].path, 'C:\\Users\\tr\\AppData\\Local')
+  assert.equal(s.big_dirs[0].path, 'C:\\Users\\demo\\AppData\\Local')
   assert.equal(s.big_dirs[0].size_human, '226.0 GB')
   assert.equal(s.big_dirs[0].depth, 3)
   assert.deepEqual(s.big_dirs[0].top_children, [{ name: 'PackageCache', size_human: '80.0 GB' }])

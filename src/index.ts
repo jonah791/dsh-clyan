@@ -357,7 +357,7 @@ export function apply(ctx: Context, config: Config): void {
     name: 'clyan_space_deep',
     description: '深度空间扫描（内建递归）：一次 DFS 计算目录树真实大小，回答「磁盘被什么占满」的深层版——clyan scan disk 只统计顶层（如 Users 只报 13GB 实际 226GB），本工具递归摸清。返回分层大目录 + 大文件。全盘可能 2-3 分钟。',
     parameters: {
-      path: { type: 'string', description: '扫描根路径（缺省用配置默认盘；建议指定如 C:\\Users\\tr\\AppData 更快）' },
+      path: { type: 'string', description: '扫描根路径（缺省用配置默认盘；建议指定如 <home>\\AppData 更快）' },
       maxDepth: { type: 'number', description: '目录收集深度（缺省 4；计算深度不限，只限制展示层级）' },
       dirThresholdMB: { type: 'number', description: '大目录阈值 MB（缺省 200）' },
       fileThresholdMB: { type: 'number', description: '大文件阈值 MB（缺省 200）' },
