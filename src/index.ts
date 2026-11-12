@@ -196,6 +196,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_pulse：磁盘健康检查 ----------
   reg(defineTool({
     name: 'clyan_pulse',
+    deferLoading: true,
     description: '磁盘健康检查（<1ms 反射，零扫描零 IO）：返回空闲空间。path 缺省用配置默认盘。',
     parameters: {
       path: { type: 'string', description: '盘符/路径（如 C:\\）' },
@@ -224,6 +225,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_scan：扫描（默认聚合摘要） ----------
   reg(defineTool({
     name: 'clyan_scan',
+    deferLoading: true,
     description: '扫描可清理项。默认返回聚合摘要（分类/安全分布/top 大项），detail=true 才返回全量 items——防撑爆上下文。',
     parameters: {
       mode: { type: 'string', description: '扫描模式：quick/disk/files/packages/system/browsers/duplicates/node-waste 等（缺省 progressive）' },
@@ -259,6 +261,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_report：磁盘全景报告（合成） ----------
   reg(defineTool({
     name: 'clyan_report',
+    deferLoading: true,
     description: '磁盘全景报告：合成 pulse + 扫描聚合 + 历史近况 → 一次调用拿决策全貌（磁盘状态/可清理潜力/近期清理）。',
     parameters: {
       path: { type: 'string', description: '盘符/路径（缺省用配置默认盘）' },
@@ -309,6 +312,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_space：磁盘空间占用分析 ----------
   reg(defineTool({
     name: 'clyan_space',
+    deferLoading: true,
     description: '磁盘空间占用分析（已占用分布）：总/已用/空闲/使用率 + top 大目录逐层展开 + gap 分析（未扫到部分）。回答「磁盘被什么占满了」。',
     parameters: {
       path: { type: 'string', description: '盘符/路径（缺省用配置默认盘）' },
@@ -355,6 +359,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_space_deep：深度空间扫描（内建递归，补 clyan 只扫顶层的缺） ----------
   reg(defineTool({
     name: 'clyan_space_deep',
+    deferLoading: true,
     description: '深度空间扫描（内建递归）：一次 DFS 计算目录树真实大小，回答「磁盘被什么占满」的深层版——clyan scan disk 只统计顶层（如 Users 只报 13GB 实际 226GB），本工具递归摸清。返回分层大目录 + 大文件。全盘可能 2-3 分钟。',
     parameters: {
       path: { type: 'string', description: '扫描根路径（缺省用配置默认盘；建议指定如 <home>\\AppData 更快）' },
@@ -398,6 +403,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_app_cache：应用内部缓存扫描（通用 AppData 关键字） ----------
   reg(defineTool({
     name: 'clyan_app_cache',
+    deferLoading: true,
     description: '应用内部缓存扫描（通用）：遍历 AppData\\Local+Roaming+LocalLow 各应用目录，递归找 cache/tmp/temp/log/old/backup/update/download 类子目录（>minSizeMB）。返回可清清单（path/size/safety/confidence）+ 聚合统计。这是专业清理工具的重点扫描——应用缓存往往单项几百 MB 到几 GB。',
     parameters: {
       minSizeMB: { type: 'number', description: '最小项大小 MB（缺省 50）' },
@@ -460,6 +466,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_doctor：系统诊断 ----------
   reg(defineTool({
     name: 'clyan_doctor',
+    deferLoading: true,
     description: 'Clyan 系统诊断：模块可导入性/数据库/磁盘/56 providers/缓存一致性检查。',
     parameters: {},
     output: {
@@ -486,6 +493,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_reclaim：完整回收计划（全量扫描+分阶段） ----------
   reg(defineTool({
     name: 'clyan_reclaim',
+    deferLoading: true,
     description: '完整回收计划（=全量扫描→去重→按 recovery_cost 分阶段 none/low/medium/high/unknown）。默认返回聚合摘要（各阶段统计+recommendation+top 项），detail=true 才全量。默认 dry-run 不删；执行需 dryRun=false + yes=true。',
     parameters: {
       path: { type: 'string', description: '根路径（缺省用配置默认盘）' },
@@ -540,6 +548,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_clean：清理执行 ----------
   reg(defineTool({
     name: 'clyan_clean',
+    deferLoading: true,
     description: '清理执行。安全闸门（fail-closed）：受保护路径 + 非缓存语义路径会被强制拦截（blocked_items），不再仅警告。默认 dry-run 预览（不删）；实际删除需显式：autoSafe=true（仅 confidence>=0.9 且 safety=safe）或 deep=true+yes=true。items 可传 JSON 指定清理项。',
     parameters: {
       items: { type: 'string', description: 'items JSON 字符串或文件路径（来自 scan 结果）' },
@@ -575,6 +584,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_smart_clear：智能清理链（扫描→过滤→建议，执行需确认） ----------
   reg(defineTool({
     name: 'clyan_smart_clear',
+    deferLoading: true,
     description: '智能清理链：扫描 → 只挑 recovery_cost=none & safety=safe & confidence>=0.9 的安全项 → 返回建议集。执行仍默认预览，需 dryRun=false + yes=true 才删——删不删归爱丽丝判断。',
     parameters: {
       path: { type: 'string', description: '根路径（缺省用配置默认盘）' },
@@ -631,6 +641,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_auto_clear：零决策自动清理 ----------
   reg(defineTool({
     name: 'clyan_auto_clear',
+    deferLoading: true,
     description: '零决策自动清理：只删 recovery_cost=none 项（Temp/npx/缩略图/WER 等）。使用缓存数据优先。实际执行会删文件——调用前确认。',
     parameters: {
       path: { type: 'string', description: '根路径（缺省用配置默认盘）' },
@@ -663,6 +674,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_history：清理历史 ----------
   reg(defineTool({
     name: 'clyan_history',
+    deferLoading: true,
     description: '查看清理历史：最近操作列表，或按 id 查看单次详情。',
     parameters: {
       id: { type: 'string', description: '操作 ID（查看详情）' },
@@ -693,6 +705,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_undo：撤销清理 ----------
   reg(defineTool({
     name: 'clyan_undo',
+    deferLoading: true,
     description: '撤销一次清理操作（从回收站恢复）。需要操作 ID（来自 history）。',
     parameters: {
       id: { type: 'string', required: true, description: '操作 ID（clyan_history 获取）' },
@@ -719,6 +732,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_verify：清理验证 ----------
   reg(defineTool({
     name: 'clyan_verify',
+    deferLoading: true,
     description: '清理验证：无 id 时对比当前磁盘状态（pulse）与最近清理历史；有 id 时返回单次操作详情（含 before/after free）。闭环确认清理效果。',
     parameters: {
       id: { type: 'string', description: '操作 ID（缺省=最近一次清理的验证）' },
@@ -777,6 +791,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_schedule：定时清理管理 ----------
   reg(defineTool({
     name: 'clyan_schedule',
+    deferLoading: true,
     description: '定时清理任务管理：create=创建每周定时清理（path/time 可选），remove=移除，缺省=查看。注意：自主性铁律下爱丽丝不自动创建定时删除，此工具供主人安排时使用。',
     parameters: {
       action: { type: 'string', description: 'create/remove/（缺省=查看）' },
@@ -810,6 +825,7 @@ export function apply(ctx: Context, config: Config): void {
   // ---------- clyan_trust：可信路径管理（含审计） ----------
   reg(defineTool({
     name: 'clyan_trust',
+    deferLoading: true,
     description: '可信路径管理：list=查看，add=添加（跳过保护警告），remove=移除，audit=查看 trust 放行审计日志。安全重构后：trust 放行会记录时间/来源/原因（可追溯）。',
     parameters: {
       action: { type: 'string', description: 'list/add/remove/audit' },
